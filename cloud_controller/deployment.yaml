@@ -1,0 +1,239 @@
+---
+apiVersion: "v1"
+kind: "Service"
+metadata:
+  name: "cloud-controller-service"
+spec:
+  clusterIP: "None"
+  ports:
+  - name: "api"
+    port: 9022
+    protocol: "TCP"
+    targetPort: 9022
+  - name: "api-tls"
+    port: 9023
+    protocol: "TCP"
+    targetPort: 9023
+  - name: "statsd"
+    port: 8125
+    protocol: "TCP"
+    targetPort: 8125
+  selector:
+    app: "cloud-controller"
+---
+apiVersion: "apps/v1"
+kind: "Deployment"
+metadata:
+  name: "cloud-controller"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: "cloud-controller"
+  template:
+    metadata:
+      name: "cloud-controller"
+      labels:
+        app: "cloud-controller"
+      annotations:
+    spec:
+      initContainers:
+      - name: migrate-db
+        image: eirini/cc-db-migrate
+        env:
+        - name: DB
+          value: mysql
+        - name: DB_CONNECTION_STRING
+          value: "mysql2://ccadmin:password@mysql-set.scf.svc.cluster.local:3306/ccdb"
+      - name: seed-db
+        image: eirini/cc-db-seed
+        env:
+        - name: DB
+          value: mysql
+        - name: DB_CONNECTION_STRING
+          value: "mysql2://ccadmin:password@mysql-set.scf.svc.cluster.local:3306/ccdb"
+      containers:
+      - name: "cloud-controller"
+        env:
+        - name: "BUNDLE_GEMFILE" 
+          value: "/var/vcap/packages/cloud_controller_ng/cloud_controller_ng/Gemfile"
+        - name: "CLOUD_CONTROLLER_NG_CONFIG"
+          value: "/config/cloud_controller_ng.yml"
+        - name: "C_INCLUDE_PATH"
+          value: "/libpq/include"
+        - name: "DYNO"
+          value: "cc-1"
+        - name: "HOME"
+          value: "/home/vcap"
+        - name: "LANG"
+          value: "en_US.UTF-8"
+        - name:  "LIBRARY_PATH"
+          value: "/libpq/lib"
+        - name: "NEW_RELIC_ENV"
+          value: "some-name"
+        - name: "NRCONFIG"
+          value: "/config/newrelic.yml"
+        - name: "RAILS_ENV"
+          value: "production"
+        image: "eirini/cloud_controller"
+        imagePullPolicy: "Always"
+        command: 
+        - "/var/vcap/packages/cloud_controller_ng/cloud_controller_ng/bin/cloud_controller"
+        - "-c"
+        - "/var/vcap/jobs/cloud_controller_ng/config/cloud_controller_ng.yml"
+        ports:
+        - containerPort: 9022
+          name: "api"
+          protocol: "TCP"
+        - containerPort: 9023
+          name: "api-tls"
+          protocol: "TCP"
+        - containerPort: 8125
+          name: "statsd"
+          protocol: "TCP"
+        securityContext:
+          privileged: true
+          runAsUser: 0
+        volumeMounts:
+        - mountPath: "/var/vcap/data"
+          name: "data"
+        - mountPath: "/var/vcap/jobs/cloud_controller_ng/config"
+          name: "config"
+        - mountPath: "/var/vcap/jobs/cloud_controller_ng/config/certs"
+          name: "certs"
+          #      - name: "nginx"
+          #        image: "mnitchev/nginx-upload"
+          #        command:
+          #        - "/usr/local/nginx/sbin/nginx"
+          #        - "-c"
+          #        - "/var/vcap/jobs/cloud_controller_ng/config/nginx.conf"
+          #        securityContext:
+          #          allowPrivilegeEscalation: true
+          #          privileged: true
+          #          runAsUser: 0
+          #        readinessProbe:
+          #          httpGet:
+          #            path: "/v2/info"
+          #            port: 9022
+          #        volumeMounts:
+          #        - mountPath: "/var/vcap/data"
+          #          name: "data"
+          #        - mountPath: "/var/vcap/jobs/cloud_controller_ng/config"
+          #          name: "config"
+          #        - mountPath: "/var/vcap/jobs/cloud_controller_ng/config/certs"
+          #          name: "certs"
+      - name: statsd-injector
+        image: "eirini/statsd-injector"
+        command: ["/statsd"]
+        args:
+        - "--statsd-host"
+        - "localhost"
+        - "--statsd-port"
+        - '8125'
+        - "--metron-port"
+        - '3458'
+        - "--ca"
+        - "/var/vcap/jobs/statsd_injector/certs/ca.crt"
+        - "--cert"
+        - "/var/vcap/jobs/statsd_injector/certs/statsd_injector.crt"
+        - "--key"
+        - "/var/vcap/jobs/statsd_injector/certs/statsd_injector.key"
+        volumeMounts:
+          - mountPath: "/var/vcap/jobs/statsd_injector/certs"
+            name: statsd-certs
+      - name: route-registrar
+        image: "eirini/route-registrar"
+        command: ["/route-registrar"]
+        args:
+        - "--configPath"
+        - "/var/vcap/jobs/route_registrar/config/registrar_settings.json"
+        volumeMounts:
+          - mountPath: "/var/vcap/jobs/route_registrar/config/certs"
+            name: route-registrar-certs
+          - mountPath: "/var/vcap/jobs/route_registrar/config"
+            name: route-registrar-config
+      - name: "local-worker-1"
+        image: "eirini/cloud_controller"
+        imagePullPolicy: "Always"
+        command: 
+        - "bundle"
+        - "exec"
+        - "rake"
+        - "jobs:local[cc_api_worker.cloud-controller.1]"
+        env: 
+        - name: "BUNDLE_GEMFILE"
+          value: "/var/vcap/packages/cloud_controller_ng/cloud_controller_ng/Gemfile"
+        - name: "CLOUD_CONTROLLER_NG_CONFIG"
+          value: "/var/vcap/jobs/cloud_controller_ng/config/cloud_controller_ng.yml"
+        - name: "C_INCLUDE_PATH"
+          value: "/var/vcap/packages/libpq/include"
+        - name: "LANG"
+          value: "en_US.UTF-8"
+        - name: "LIBRARY_PATH"
+          value: "/var/vcap/packages/libpq/lib"
+        - name: "NEW_RELIC_ENV"
+          value: "some-name"
+        - name: "NEW_RELIC_DISPATCHER"
+          value: "delayed_job"
+        - name: "NRCONFIG"
+          value: "/var/vcap/jobs/cloud_controller_ng/config/newrelic.yml"
+        - name: "INDEX"
+          value: "1"
+        volumeMounts:
+        - mountPath: "/var/vcap/data"
+          name: "data"
+        - mountPath: "/var/vcap/jobs/cloud_controller_ng/config"
+          name: "config"
+      - name: "local-worker-2"
+        image: "eirini/cloud_controller"
+        imagePullPolicy: "Always"
+        command: 
+        - "bundle"
+        - "exec"
+        - "rake"
+        - "jobs:local[cc_api_worker.cloud-controller.2]"
+        env:
+        - name: "BUNDLE_GEMFILE"
+          value: "/var/vcap/packages/cloud_controller_ng/cloud_controller_ng/Gemfile"
+        - name: "CLOUD_CONTROLLER_NG_CONFIG"
+          value: "/var/vcap/jobs/cloud_controller_ng/config/cloud_controller_ng.yml"
+        - name: "C_INCLUDE_PATH"
+          value: "/var/vcap/packages/libpq/include"
+        - name: "LANG"
+          value: "en_US.UTF-8"
+        - name: "LIBRARY_PATH"
+          value: "/var/vcap/packages/libpq/lib"
+        - name: "NEW_RELIC_ENV"
+          value: "some-name"
+        - name: "NEW_RELIC_DISPATCHER"
+          value: "delayed_job"
+        - name: "NRCONFIG"
+          value: "/var/vcap/jobs/cloud_controller_ng/config/newrelic.yml"
+        - name: "INDEX"
+          value: "2"
+        volumeMounts:
+        - mountPath: "/var/vcap/data"
+          name: "data"
+        - mountPath: "/var/vcap/jobs/cloud_controller_ng/config"
+          name: "config"
+      dnsPolicy: "ClusterFirst"
+      restartPolicy: "Always"
+      terminationGracePeriodSeconds: 600
+      volumes:
+      - name: "data"
+        emptyDir: {}
+      - name: "config"
+        configMap:
+          name: "cloud-controller-config"
+      - name: "statsd-certs"
+        configMap:
+          name: "statsd-injector-certs"
+      - name: "route-registrar-certs"
+        configMap:
+          name: "route-registrar-certs"
+      - name: "route-registrar-config"
+        configMap:
+          name: "route-registrar-config"
+      - name: "certs"
+        configMap:
+          name: "cloud-controller-certs"
