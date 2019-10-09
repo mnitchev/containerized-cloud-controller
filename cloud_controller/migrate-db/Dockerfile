@@ -1,4 +1,4 @@
-FROM eirini/cloud_controller
+FROM eirini/cloud_controller:v2
 
 COPY migrate-db.sh .
 

@@ -4,16 +4,19 @@ kind: "Service"
 metadata:
   name: "cloud-controller-service"
 spec:
-  clusterIP: "None"
   ports:
   - name: "api"
     port: 9022
     protocol: "TCP"
     targetPort: 9022
-  - name: "api-tls"
+  - name: "api-mtls"
     port: 9023
     protocol: "TCP"
     targetPort: 9023
+  - name: "api-tls"
+    port: 9024
+    protocol: "TCP"
+    targetPort: 9024
   - name: "statsd"
     port: 8125
     protocol: "TCP"
@@ -39,14 +42,14 @@ spec:
     spec:
       initContainers:
       - name: migrate-db
-        image: eirini/cc-db-migrate
+        image: eirini/cc-db-migrate:v2
         env:
         - name: DB
           value: mysql
         - name: DB_CONNECTION_STRING
           value: "mysql2://ccadmin:password@mysql-set.scf.svc.cluster.local:3306/ccdb"
       - name: seed-db
-        image: eirini/cc-db-seed
+        image: eirini/cc-db-seed:v2
         env:
         - name: DB
           value: mysql
@@ -55,6 +58,11 @@ spec:
       containers:
       - name: "cloud-controller"
         env:
+        - name: "INTERNAL_CA_CERT"
+          valueFrom:
+            secretKeyRef:
+              key: internal-ca-cert
+              name: secrets-2.16.4-2
         - name: "BUNDLE_GEMFILE" 
           value: "/var/vcap/packages/cloud_controller_ng/cloud_controller_ng/Gemfile"
         - name: "CLOUD_CONTROLLER_NG_CONFIG"
@@ -75,12 +83,12 @@ spec:
           value: "/config/newrelic.yml"
         - name: "RAILS_ENV"
           value: "production"
-        image: "eirini/cloud_controller"
+        image: "eirini/cloud_controller:v2"
         imagePullPolicy: "Always"
-        command: 
-        - "/var/vcap/packages/cloud_controller_ng/cloud_controller_ng/bin/cloud_controller"
-        - "-c"
-        - "/var/vcap/jobs/cloud_controller_ng/config/cloud_controller_ng.yml"
+        #        command: 
+        #        - "/var/vcap/packages/cloud_controller_ng/cloud_controller_ng/bin/cloud_controller"
+        #        - "-c"
+        #        - "/var/vcap/jobs/cloud_controller_ng/config/cloud_controller_ng.yml"
         ports:
         - containerPort: 9022
           name: "api"
@@ -97,31 +105,35 @@ spec:
         volumeMounts:
         - mountPath: "/var/vcap/data"
           name: "data"
+        - mountPath: "/var/vcap/data/cloud_controller_ng/tmp"
+          name: "upload-data"
         - mountPath: "/var/vcap/jobs/cloud_controller_ng/config"
           name: "config"
         - mountPath: "/var/vcap/jobs/cloud_controller_ng/config/certs"
           name: "certs"
-          #      - name: "nginx"
-          #        image: "mnitchev/nginx-upload"
-          #        command:
-          #        - "/usr/local/nginx/sbin/nginx"
-          #        - "-c"
-          #        - "/var/vcap/jobs/cloud_controller_ng/config/nginx.conf"
-          #        securityContext:
-          #          allowPrivilegeEscalation: true
-          #          privileged: true
-          #          runAsUser: 0
-          #        readinessProbe:
-          #          httpGet:
-          #            path: "/v2/info"
-          #            port: 9022
-          #        volumeMounts:
-          #        - mountPath: "/var/vcap/data"
-          #          name: "data"
-          #        - mountPath: "/var/vcap/jobs/cloud_controller_ng/config"
-          #          name: "config"
-          #        - mountPath: "/var/vcap/jobs/cloud_controller_ng/config/certs"
-          #          name: "certs"
+      - name: "nginx"
+        image: "mnitchev/nginx-upload"
+        command:
+        - "/usr/local/nginx/sbin/nginx"
+        - "-c"
+        - "/var/vcap/jobs/cloud_controller_ng/config/nginx.conf"
+        securityContext:
+          allowPrivilegeEscalation: true
+          privileged: true
+          runAsUser: 0
+          # readinessProbe:
+          #   httpGet:
+          #     path: "/v2/info"
+          #     port: 9024
+        volumeMounts:
+        - mountPath: "/var/vcap/data"
+          name: "data"
+        - mountPath: "/var/vcap/data/cloud_controller_ng/tmp"
+          name: "upload-data"
+        - mountPath: "/var/vcap/jobs/cloud_controller_ng/config"
+          name: "config"
+        - mountPath: "/var/vcap/jobs/cloud_controller_ng/config/certs"
+          name: "certs"
       - name: statsd-injector
         image: "eirini/statsd-injector"
         command: ["/statsd"]
@@ -153,7 +165,7 @@ spec:
           - mountPath: "/var/vcap/jobs/route_registrar/config"
             name: route-registrar-config
       - name: "local-worker-1"
-        image: "eirini/cloud_controller"
+        image: "eirini/cloud_controller:v2"
         imagePullPolicy: "Always"
         command: 
         - "bundle"
@@ -182,10 +194,12 @@ spec:
         volumeMounts:
         - mountPath: "/var/vcap/data"
           name: "data"
+        - mountPath: "/var/vcap/data/cloud_controller_ng/tmp"
+          name: "upload-data"
         - mountPath: "/var/vcap/jobs/cloud_controller_ng/config"
           name: "config"
       - name: "local-worker-2"
-        image: "eirini/cloud_controller"
+        image: "eirini/cloud_controller:v2"
         imagePullPolicy: "Always"
         command: 
         - "bundle"
@@ -214,6 +228,8 @@ spec:
         volumeMounts:
         - mountPath: "/var/vcap/data"
           name: "data"
+        - mountPath: "/var/vcap/data/cloud_controller_ng/tmp"
+          name: "upload-data"
         - mountPath: "/var/vcap/jobs/cloud_controller_ng/config"
           name: "config"
       dnsPolicy: "ClusterFirst"
@@ -221,6 +237,8 @@ spec:
       terminationGracePeriodSeconds: 600
       volumes:
       - name: "data"
+        emptyDir: {}
+      - name: "upload-data"
         emptyDir: {}
       - name: "config"
         configMap:

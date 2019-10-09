@@ -17,4 +17,5 @@ COPY cloud_controller_ng .
 RUN bundle config build.nokogiri --use-system-libraries
 RUN bundle install
 RUN mkdir -p /var/vcap/sys/log/cloud_controller_ng/
-#ENTRYPOINT [ /cloud_controller_ng/bin/cloud_controller -c -c /config/cloud_controller_ng.yml ]
+COPY start.sh .
+ENTRYPOINT [ "/var/vcap/packages/cloud_controller_ng/cloud_controller_ng/start.sh" ]
